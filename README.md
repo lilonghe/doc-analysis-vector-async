@@ -8,10 +8,11 @@
 - 🤖 **智能文档解析** - 基于 MinerU 的高质量 PDF 解析，支持表格、图片、公式
 - 🧠 **AI 智能分块** - 使用 OpenAI GPT 进行语义化智能分块
 - 🔍 **向量化存储** - OpenAI Embedding + ChromaDB 向量数据库
-- 📊 **实时状态追踪** - 文件处理进度实时展示
+- 📊 **实时状态追踪** - 文件处理进度实时展示，数据库持久化存储
 - ⚡ **并发处理** - Celery 任务队列支持多文件并行处理
 - 🔄 **错误重试** - 智能错误处理和重试机制
 - 🔍 **语义搜索** - 基于向量相似度的文档内容搜索
+- 💾 **数据持久化** - SQLite数据库存储，重启不丢失处理状态
 
 ## 🏗️ 技术架构
 
@@ -26,8 +27,9 @@
 - **MinerU** - 专业文档解析引擎
 - **OpenAI API** - 智能分块 + 向量化
 - **ChromaDB** - 向量数据库
+- **SQLite + SQLAlchemy** - 状态持久化存储
 - **Celery + Redis** - 异步任务队列
-- **Redis** - 状态存储
+- **Redis** - 消息代理（仅用于Celery）
 
 ### 核心处理流程
 ```
@@ -134,8 +136,11 @@ OPENAI_API_KEY=your_openai_key_here
 OPENAI_MODEL=gpt-4o-mini
 OPENAI_EMBEDDING_MODEL=text-embedding-3-small
 
-# Redis 配置  
+# Redis 配置（仅用于Celery消息代理）
 REDIS_URL=redis://localhost:6379/0
+
+# 数据库配置
+DATABASE_URL=sqlite:///./doc_vector.db
 
 # 文件上传配置
 MAX_FILE_SIZE=100
@@ -153,6 +158,9 @@ CHROMA_PERSIST_DIRECTORY=./chroma_db
 - `POST /api/process-all` - 开始处理所有文件
 - `POST /api/search` - 向量搜索
 - `GET /api/database/stats` - 数据库统计
+- `GET /api/files/{file_id}/chunks` - 获取文件文档块
+- `GET /api/files/{file_id}/logs` - 获取文件处理日志
+- `POST /api/database/cleanup` - 清理旧记录
 - `DELETE /api/files/{file_id}` - 删除文件
 
 ### 错误处理
@@ -170,19 +178,24 @@ doc-vector/
 ├── backend/                 # Python 后端
 │   ├── main.py             # FastAPI 主应用
 │   ├── tasks.py            # Celery 任务定义
+│   ├── database.py         # SQLAlchemy 数据库模型
 │   ├── mineru_parser.py    # MinerU 解析器
 │   ├── openai_processor.py # OpenAI 处理器
 │   ├── chroma_db.py        # ChromaDB 操作
 │   ├── error_handler.py    # 错误处理
-│   └── requirements.txt    # Python 依赖
+│   ├── requirements.txt    # Python 依赖
+│   ├── .env.example        # 环境变量示例
+│   └── doc_vector.db       # SQLite 数据库文件
 ├── frontend/               # React 前端
 │   ├── src/
 │   │   ├── components/     # React 组件
 │   │   ├── api.ts         # API 接口
 │   │   └── types.ts       # 类型定义
 │   └── package.json       # Node.js 依赖
-├── start.sh               # 启动脚本
-└── README.md              # 项目文档
+├── uploads/               # 文件上传目录
+├── chroma_db/            # ChromaDB 数据目录
+├── start.sh              # 启动脚本
+└── README.md             # 项目文档
 ```
 
 ### 扩展功能
@@ -206,7 +219,12 @@ doc-vector/
    - 检查 PDF 文件是否损坏
    - 确保系统内存充足
 
-4. **Celery Worker 无法启动**
+4. **数据库错误**
+   - 检查数据库文件权限
+   - 确保磁盘空间充足
+   - 数据库会自动创建，无需手动初始化
+
+5. **Celery Worker 无法启动**
    - 检查 Redis 连接
    - 确认依赖已正确安装
 

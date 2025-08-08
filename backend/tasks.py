@@ -1,6 +1,5 @@
 from celery import Celery
 import os
-import redis
 import json
 from datetime import datetime
 import time
@@ -14,7 +13,7 @@ from error_handler import (
     NonRetryableError
 )
 
-# 创建Celery实例
+# 创建Celery实例（仍然使用Redis作为消息代理）
 celery_app = Celery(
     'doc_processor',
     broker='redis://localhost:6379/0',
@@ -31,29 +30,36 @@ celery_app.conf.update(
     worker_concurrency=3,  # 并发处理3个任务
 )
 
-# Redis连接
-redis_client = redis.Redis(host='localhost', port=6379, db=0, decode_responses=True)
-
 def update_file_status(file_id: str, status: str, progress: int, message: str):
     """更新文件处理状态"""
     try:
-        file_data = redis_client.get(f"file:{file_id}")
-        if file_data:
-            file_info = json.loads(file_data)
-            file_info.update({
-                "status": status,
-                "progress": progress,
-                "message": message,
-                "updated_at": datetime.now().isoformat()
-            })
-            redis_client.set(f"file:{file_id}", json.dumps(file_info))
+        from database import get_database_manager
+        db_manager = get_database_manager()
+        
+        success = db_manager.update_file_status(file_id, status, progress, message)
+        if not success:
+            print(f"Warning: Failed to update status for file {file_id}")
+            
+        # 记录处理阶段日志
+        if status in ["parsing", "chunking", "embedding", "storing"]:
+            db_manager.log_processing_stage(file_id, status, "started", message)
+        elif status == "completed":
+            db_manager.log_processing_stage(file_id, "processing", "completed", message)
+        elif status == "error":
+            db_manager.log_processing_stage(file_id, "processing", "failed", message)
+            
     except Exception as e:
         print(f"Error updating file status: {e}")
+        import traceback
+        traceback.print_exc()
 
 @celery_app.task(bind=True)
 def process_document(self, file_id: str):
     """处理单个文档的主任务（带错误处理和重试）"""
     try:
+        from database import get_database_manager
+        db_manager = get_database_manager()
+        
         # 检查是否应该跳过此任务
         if error_tracker.should_skip_task(file_id, max_errors=3):
             error_msg = f"❌ 任务跳过: 错误次数过多 ({error_tracker.get_error_count(file_id)} 次)"
@@ -61,43 +67,72 @@ def process_document(self, file_id: str):
             return {"file_id": file_id, "status": "skipped", "reason": "too_many_errors"}
         
         # 获取文件信息
-        file_data = redis_client.get(f"file:{file_id}")
-        if not file_data:
+        file_record = db_manager.get_file_record(file_id)
+        if not file_record:
             raise NonRetryableError("文件信息不存在", "file_error")
         
-        file_info = json.loads(file_data)
-        filepath = file_info["filepath"]
-        filename = file_info["filename"]
+        filepath = file_record.filepath
+        filename = file_record.filename
         
         print(f"开始处理文件: {filename}")
         
+        # 记录开始时间
+        import time
+        start_time = time.time()
+        
         # 阶段1: MinerU解析文档（带重试）
         update_file_status(file_id, "parsing", 10, "MinerU解析中...")
+        parsing_start = time.time()
         extracted_content = parse_document_with_retry(file_id, filepath)
+        parsing_duration = time.time() - parsing_start
+        db_manager.log_processing_stage(file_id, "parsing", "completed", "文档解析完成", parsing_duration)
+        
+        # 更新文档页数
+        if extracted_content.get("metadata", {}).get("total_pages"):
+            db_manager.update_file_results(file_id, total_pages=extracted_content["metadata"]["total_pages"])
+        
         update_file_status(file_id, "parsing", 30, "文档解析完成")
         
         # 阶段2: 智能分块（带重试）
         update_file_status(file_id, "chunking", 40, "智能分块中...")
+        chunking_start = time.time()
         chunks = chunk_document_with_retry(file_id, extracted_content)
+        chunking_duration = time.time() - chunking_start
+        db_manager.log_processing_stage(file_id, "chunking", "completed", f"分块完成，共{len(chunks)}块", chunking_duration)
+        
+        # 更新块数量
+        db_manager.update_file_results(file_id, chunks_count=len(chunks))
+        
         update_file_status(file_id, "chunking", 60, f"分块完成，共{len(chunks)}块")
         
         # 阶段3: 向量化（带重试）
         update_file_status(file_id, "embedding", 70, "向量化中...")
+        embedding_start = time.time()
         embeddings = generate_embeddings_with_retry(file_id, chunks)
+        embedding_duration = time.time() - embedding_start
+        db_manager.log_processing_stage(file_id, "embedding", "completed", "向量化完成", embedding_duration)
+        
         update_file_status(file_id, "embedding", 90, "向量化完成")
         
         # 阶段4: 存储到向量数据库（带重试）
         update_file_status(file_id, "storing", 95, "存储到数据库...")
+        storing_start = time.time()
         store_with_retry(file_id, chunks, embeddings)
+        storing_duration = time.time() - storing_start
+        db_manager.log_processing_stage(file_id, "storing", "completed", "存储完成", storing_duration)
         
         # 完成
-        update_file_status(file_id, "completed", 100, "✅ 处理完成")
-        print(f"文件处理完成: {filename}")
+        total_duration = time.time() - start_time
+        completion_message = f"✅ 处理完成 (耗时: {total_duration:.1f}秒)"
+        update_file_status(file_id, "completed", 100, completion_message)
+        
+        print(f"文件处理完成: {filename}, 总耗时: {total_duration:.1f}秒")
         
         return {
             "file_id": file_id,
             "filename": filename,
             "chunks_count": len(chunks),
+            "total_duration": total_duration,
             "status": "completed"
         }
         
@@ -241,17 +276,18 @@ def store_to_vector_db(file_id: str, chunks: list, embeddings: list):
     """存储到向量数据库"""
     try:
         from chroma_db import ChromaVectorDB
+        from database import get_database_manager
         
         print("存储到ChromaDB向量数据库...")
         db = ChromaVectorDB()
+        db_manager = get_database_manager()
         
         # 获取文件信息
-        file_data = redis_client.get(f"file:{file_id}")
-        if not file_data:
+        file_record = db_manager.get_file_record(file_id)
+        if not file_record:
             raise Exception("无法获取文件信息")
             
-        file_info = json.loads(file_data)
-        filename = file_info["filename"]
+        filename = file_record.filename
         
         # 存储到向量数据库
         success = db.store_document_chunks(

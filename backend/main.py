@@ -5,8 +5,7 @@ from typing import List, Dict, Any
 import uuid
 import os
 from datetime import datetime
-import redis
-import json
+from database import get_database_manager, file_record_to_dict
 
 app = FastAPI(title="Document Vector Processing API")
 
@@ -19,8 +18,8 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Redis连接
-redis_client = redis.Redis(host='localhost', port=6379, db=0, decode_responses=True)
+# 数据库管理器
+db_manager = get_database_manager()
 
 # 确保上传目录存在
 UPLOAD_DIR = "uploads"
@@ -48,142 +47,125 @@ async def upload_files(files: List[UploadFile] = File(...)):
         with open(file_path, "wb") as f:
             f.write(content)
         
-        # 初始化文件状态
-        file_info = {
-            "id": file_id,
-            "filename": file.filename,
-            "filepath": file_path,
-            "status": "pending",
-            "progress": 0,
-            "message": "等待处理中...",
-            "created_at": datetime.now().isoformat(),
-            "updated_at": datetime.now().isoformat()
-        }
-        
-        # 存储到Redis
-        redis_client.set(f"file:{file_id}", json.dumps(file_info))
-        
-        uploaded_files.append({
-            "id": file_id,
-            "filename": file.filename,
-            "status": "pending"
-        })
+        # 创建数据库记录
+        try:
+            db_manager.create_file_record(
+                file_id=file_id,
+                filename=file.filename,
+                filepath=file_path
+            )
+            
+            uploaded_files.append({
+                "id": file_id,
+                "filename": file.filename,
+                "status": "pending"
+            })
+        except Exception as e:
+            # 如果数据库操作失败，删除已保存的文件
+            if os.path.exists(file_path):
+                os.remove(file_path)
+            raise HTTPException(status_code=500, detail=f"数据库操作失败: {str(e)}")
     
     return {"files": uploaded_files, "message": f"成功上传 {len(uploaded_files)} 个文件"}
 
 @app.get("/api/files/status")
 async def get_all_files_status():
     """获取所有文件的处理状态"""
-    files = []
-    keys = redis_client.keys("file:*")
-    
-    for key in keys:
-        file_data = redis_client.get(key)
-        if file_data:
-            file_info = json.loads(file_data)
-            files.append({
-                "id": file_info["id"],
-                "filename": file_info["filename"],
-                "status": file_info["status"],
-                "progress": file_info["progress"],
-                "message": file_info["message"],
-                "updated_at": file_info["updated_at"]
-            })
-    
-    # 按创建时间排序
-    files.sort(key=lambda x: x.get("updated_at", ""), reverse=True)
-    return {"files": files}
+    try:
+        file_records = db_manager.get_all_file_records()
+        files = [file_record_to_dict(record) for record in file_records]
+        return {"files": files}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"获取文件状态失败: {str(e)}")
 
 @app.get("/api/files/{file_id}/status")
 async def get_file_status(file_id: str):
     """获取单个文件的处理状态"""
-    file_data = redis_client.get(f"file:{file_id}")
-    if not file_data:
-        raise HTTPException(status_code=404, detail="文件不存在")
-    
-    file_info = json.loads(file_data)
-    return {
-        "id": file_info["id"],
-        "filename": file_info["filename"],
-        "status": file_info["status"],
-        "progress": file_info["progress"],
-        "message": file_info["message"],
-        "updated_at": file_info["updated_at"]
-    }
+    try:
+        file_record = db_manager.get_file_record(file_id)
+        if not file_record:
+            raise HTTPException(status_code=404, detail="文件不存在")
+        
+        return file_record_to_dict(file_record)
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"获取文件状态失败: {str(e)}")
 
 @app.post("/api/files/{file_id}/process")
 async def process_file(file_id: str):
     """开始处理单个文件"""
-    file_data = redis_client.get(f"file:{file_id}")
-    if not file_data:
-        raise HTTPException(status_code=404, detail="文件不存在")
-    
-    # 导入Celery任务
-    from tasks import process_document
-    
-    # 更新状态为等待处理
-    file_info = json.loads(file_data)
-    file_info.update({
-        "status": "pending",
-        "message": "已加入处理队列...",
-        "updated_at": datetime.now().isoformat()
-    })
-    redis_client.set(f"file:{file_id}", json.dumps(file_info))
-    
-    # 提交到Celery队列
-    task = process_document.delay(file_id)
-    
-    return {"message": f"文件 {file_id} 已加入处理队列", "task_id": task.id}
+    try:
+        file_record = db_manager.get_file_record(file_id)
+        if not file_record:
+            raise HTTPException(status_code=404, detail="文件不存在")
+        
+        # 导入Celery任务
+        from tasks import process_document
+        
+        # 更新状态为等待处理
+        db_manager.update_file_status(file_id, "pending", 0, "已加入处理队列...")
+        
+        # 提交到Celery队列
+        task = process_document.delay(file_id)
+        
+        return {"message": f"文件 {file_id} 已加入处理队列", "task_id": task.id}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"启动处理失败: {str(e)}")
 
 @app.post("/api/process-all")
 async def process_all_files():
     """开始处理所有待处理的文件"""
-    from tasks import process_document
-    
-    keys = redis_client.keys("file:*")
-    processed_count = 0
-    task_ids = []
-    
-    for key in keys:
-        file_data = redis_client.get(key)
-        if file_data:
-            file_info = json.loads(file_data)
-            if file_info["status"] == "pending":
-                # 提交到Celery队列
-                task = process_document.delay(file_info["id"])
-                task_ids.append(task.id)
-                processed_count += 1
-    
-    return {
-        "message": f"已将 {processed_count} 个文件加入处理队列",
-        "task_ids": task_ids
-    }
+    try:
+        from tasks import process_document
+        
+        # 获取所有待处理的文件
+        all_records = db_manager.get_all_file_records()
+        pending_files = [record for record in all_records if record.status == "pending"]
+        
+        task_ids = []
+        for file_record in pending_files:
+            # 提交到Celery队列
+            task = process_document.delay(file_record.id)
+            task_ids.append(task.id)
+        
+        return {
+            "message": f"已将 {len(pending_files)} 个文件加入处理队列",
+            "task_ids": task_ids
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"批量处理失败: {str(e)}")
 
 @app.delete("/api/files/{file_id}")
 async def delete_file(file_id: str):
     """删除文件"""
-    file_data = redis_client.get(f"file:{file_id}")
-    if not file_data:
-        raise HTTPException(status_code=404, detail="文件不存在")
-    
-    file_info = json.loads(file_data)
-    
-    # 删除向量数据库中的数据
     try:
-        from chroma_db import ChromaVectorDB
-        db = ChromaVectorDB()
-        db.delete_file_chunks(file_id)
+        file_record = db_manager.get_file_record(file_id)
+        if not file_record:
+            raise HTTPException(status_code=404, detail="文件不存在")
+        
+        # 删除向量数据库中的数据
+        try:
+            from chroma_db import ChromaVectorDB
+            db = ChromaVectorDB()
+            db.delete_file_chunks(file_id)
+        except Exception as e:
+            print(f"删除向量数据失败: {str(e)}")
+        
+        # 删除物理文件
+        if os.path.exists(file_record.filepath):
+            os.remove(file_record.filepath)
+        
+        # 删除数据库记录
+        db_manager.delete_file_record(file_id)
+        
+        return {"message": f"文件 {file_record.filename} 已删除"}
+    except HTTPException:
+        raise
     except Exception as e:
-        print(f"删除向量数据失败: {str(e)}")
-    
-    # 删除物理文件
-    if os.path.exists(file_info["filepath"]):
-        os.remove(file_info["filepath"])
-    
-    # 删除Redis记录
-    redis_client.delete(f"file:{file_id}")
-    
-    return {"message": f"文件 {file_info['filename']} 已删除"}
+        raise HTTPException(status_code=500, detail=f"删除文件失败: {str(e)}")
 
 @app.post("/api/search")
 async def search_documents(query: dict):
@@ -207,6 +189,8 @@ async def search_documents(query: dict):
         
         return {"query": query_text, "results": results}
         
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"搜索失败: {str(e)}")
 
@@ -214,12 +198,24 @@ async def search_documents(query: dict):
 async def get_database_stats():
     """获取数据库统计信息"""
     try:
-        from chroma_db import ChromaVectorDB
+        # 获取处理统计
+        processing_stats = db_manager.get_processing_statistics()
         
-        db = ChromaVectorDB()
-        stats = db.get_collection_stats()
+        # 获取向量数据库统计
+        try:
+            from chroma_db import ChromaVectorDB
+            vector_db = ChromaVectorDB()
+            vector_stats = vector_db.get_collection_stats()
+        except Exception as e:
+            print(f"获取向量数据库统计失败: {str(e)}")
+            vector_stats = {"error": "无法获取向量数据库统计"}
         
-        return {"stats": stats}
+        return {
+            "stats": {
+                **processing_stats,
+                "vector_db": vector_stats
+            }
+        }
         
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"获取统计信息失败: {str(e)}")
@@ -231,8 +227,8 @@ async def get_file_chunks(file_id: str):
         from chroma_db import ChromaVectorDB
         
         # 检查文件是否存在
-        file_data = redis_client.get(f"file:{file_id}")
-        if not file_data:
+        file_record = db_manager.get_file_record(file_id)
+        if not file_record:
             raise HTTPException(status_code=404, detail="文件不存在")
         
         db = ChromaVectorDB()
@@ -244,6 +240,45 @@ async def get_file_chunks(file_id: str):
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"获取文档块失败: {str(e)}")
+
+@app.get("/api/files/{file_id}/logs")
+async def get_file_processing_logs(file_id: str):
+    """获取文件处理日志"""
+    try:
+        file_record = db_manager.get_file_record(file_id)
+        if not file_record:
+            raise HTTPException(status_code=404, detail="文件不存在")
+        
+        logs = db_manager.get_processing_logs(file_id)
+        log_data = []
+        for log in logs:
+            log_data.append({
+                "stage": log.stage,
+                "status": log.status,
+                "message": log.message,
+                "duration": log.duration,
+                "created_at": log.created_at.isoformat()
+            })
+        
+        return {"file_id": file_id, "logs": log_data}
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"获取处理日志失败: {str(e)}")
+
+@app.post("/api/database/cleanup")
+async def cleanup_old_records():
+    """清理旧记录"""
+    try:
+        result = db_manager.cleanup_old_records(days=7)
+        return {
+            "message": "清理完成",
+            "deleted_files": result["deleted_files"],
+            "deleted_logs": result["deleted_logs"]
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"清理失败: {str(e)}")
 
 if __name__ == "__main__":
     import uvicorn
