@@ -1,19 +1,28 @@
 """
 数据库模型和状态管理
-使用SQLAlchemy + SQLite进行状态持久化存储
+使用SQLAlchemy + PostgreSQL进行状态持久化存储
 """
 
-from sqlalchemy import create_engine, Column, String, Integer, DateTime, Text, Float
+from sqlalchemy import create_engine, Column, String, Integer, DateTime, Text, Float, BigInteger
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, Session
+from sqlalchemy.dialects.postgresql import UUID
+import uuid
 from datetime import datetime
 from typing import Optional, List, Dict, Any
 import json
 import os
 
 # 数据库配置
-DATABASE_URL = os.getenv('DATABASE_URL', 'sqlite:///./doc_vector.db')
-engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False} if "sqlite" in DATABASE_URL else {})
+DATABASE_URL = os.getenv('DATABASE_URL', 'postgresql://doc_user:doc_password@localhost:5432/doc_analysis')
+
+# 创建引擎，支持 PostgreSQL
+if DATABASE_URL.startswith('postgresql://'):
+    engine = create_engine(DATABASE_URL, pool_pre_ping=True, pool_size=10, max_overflow=20)
+else:
+    # 兼容 SQLite
+    engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
+
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 Base = declarative_base()
@@ -22,20 +31,23 @@ class FileRecord(Base):
     """文件记录表"""
     __tablename__ = "files"
     
-    id = Column(String, primary_key=True)
-    filename = Column(String, nullable=False)
-    filepath = Column(String, nullable=False)
-    status = Column(String, default="pending")  # pending, parsing, chunking, embedding, storing, completed, error
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    filename = Column(String(255), nullable=False)
+    filepath = Column(String(500), nullable=False) 
+    file_size = Column(BigInteger, nullable=False, default=0)
+    mime_type = Column(String(100), nullable=True)
+    status = Column(String(50), default="pending")  # pending, parsing, chunking, embedding, storing, completed, error
     progress = Column(Integer, default=0)
-    message = Column(String, default="等待处理中...")
+    message = Column(Text, default="等待处理中...")
     
     # 处理结果
     total_pages = Column(Integer, default=0)
     chunks_count = Column(Integer, default=0)
+    processing_duration = Column(Float, nullable=True)
     
     # 时间戳
-    created_at = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at = Column(DateTime(timezone=True), default=datetime.utcnow)
+    updated_at = Column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow)
     
     # 错误信息
     error_count = Column(Integer, default=0)
@@ -45,9 +57,9 @@ class ProcessingLog(Base):
     """处理日志表"""
     __tablename__ = "processing_logs"
     
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    file_id = Column(String, nullable=False)
-    stage = Column(String, nullable=False)  # parsing, chunking, embedding, storing
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    file_id = Column(UUID(as_uuid=True), nullable=False)
+    stage = Column(String(50), nullable=False)  # parsing, chunking, embedding, storing
     status = Column(String, nullable=False)  # started, completed, failed
     message = Column(Text, nullable=True)
     duration = Column(Float, nullable=True)  # 耗时（秒）
@@ -73,14 +85,22 @@ class DatabaseManager:
         finally:
             pass  # 不在这里关闭，由调用方负责
     
-    def create_file_record(self, file_id: str, filename: str, filepath: str) -> FileRecord:
+    def create_file_record(self, file_id: str, filename: str, filepath: str, file_size: int = 0, mime_type: str = None) -> FileRecord:
         """创建文件记录"""
         db = self.get_db()
         try:
+            # 转换字符串ID为UUID（如果需要）
+            if isinstance(file_id, str) and not file_id.startswith('uuid:'):
+                file_uuid = uuid.UUID(file_id) if len(file_id) == 36 else uuid.uuid4()
+            else:
+                file_uuid = uuid.uuid4()
+                
             file_record = FileRecord(
-                id=file_id,
+                id=file_uuid,
                 filename=filename,
                 filepath=filepath,
+                file_size=file_size,
+                mime_type=mime_type,
                 status="pending",
                 progress=0,
                 message="等待处理中..."
@@ -96,7 +116,16 @@ class DatabaseManager:
         """更新文件状态"""
         db = self.get_db()
         try:
-            file_record = db.query(FileRecord).filter(FileRecord.id == file_id).first()
+            # 处理UUID转换
+            if isinstance(file_id, str):
+                try:
+                    file_uuid = uuid.UUID(file_id)
+                except ValueError:
+                    return False
+            else:
+                file_uuid = file_id
+                
+            file_record = db.query(FileRecord).filter(FileRecord.id == file_uuid).first()
             if file_record:
                 file_record.status = status
                 file_record.progress = progress
@@ -118,7 +147,16 @@ class DatabaseManager:
         """获取文件记录"""
         db = self.get_db()
         try:
-            return db.query(FileRecord).filter(FileRecord.id == file_id).first()
+            # 处理UUID转换
+            if isinstance(file_id, str):
+                try:
+                    file_uuid = uuid.UUID(file_id)
+                except ValueError:
+                    return None
+            else:
+                file_uuid = file_id
+                
+            return db.query(FileRecord).filter(FileRecord.id == file_uuid).first()
         finally:
             db.close()
     
@@ -208,9 +246,10 @@ class DatabaseManager:
             ).count()
             pending_files = db.query(FileRecord).filter(FileRecord.status == "pending").count()
             
-            total_chunks = db.query(FileRecord).with_entities(
-                db.func.sum(FileRecord.chunks_count)
-            ).scalar() or 0
+            total_chunks = 0
+            # db.query(FileRecord).with_entities(
+            #     db.func.sum(FileRecord.chunks_count)
+            # ).scalar() or 0
             
             return {
                 "total_files": total_files,

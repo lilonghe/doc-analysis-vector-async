@@ -1,7 +1,7 @@
 import axios from 'axios';
 import { UploadResponse, StatusResponse } from './types';
 
-const API_BASE_URL = 'http://localhost:8000';
+const API_BASE_URL = 'http://localhost:8989';
 
 export const api = {
   // 上传多个文件

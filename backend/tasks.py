@@ -20,7 +20,7 @@ celery_app = Celery(
     backend='redis://localhost:6379/0'
 )
 
-# Celery配置
+# Celery配置 - 增强可靠性
 celery_app.conf.update(
     task_serializer='json',
     accept_content=['json'],
@@ -28,6 +28,24 @@ celery_app.conf.update(
     timezone='UTC',
     enable_utc=True,
     worker_concurrency=3,  # 并发处理3个任务
+    
+    # 任务可靠性配置
+    task_acks_late=True,  # 任务完成后才确认，避免任务丢失
+    worker_prefetch_multiplier=1,  # 每个worker一次只处理一个任务
+    task_reject_on_worker_lost=True,  # worker丢失时拒绝任务
+    
+    # 结果持久化配置
+    result_expires=3600,  # 结果保存1小时
+    result_persistent=True,  # 结果持久化
+    
+    # 重试配置
+    task_default_retry_delay=60,  # 默认重试延迟60秒
+    task_max_retries=3,  # 最大重试次数
+    
+    # Redis连接配置
+    broker_connection_retry=True,
+    broker_connection_retry_on_startup=True,
+    broker_connection_max_retries=10,
 )
 
 def update_file_status(file_id: str, status: str, progress: int, message: str):
@@ -209,19 +227,19 @@ def mineru_parse_document(filepath: str) -> dict:
         raise
 
 def intelligent_chunking(parsed_content: dict) -> list:
-    """使用OpenAI进行智能分块"""
+    """使用Ollama进行智能分块"""
     try:
-        from openai_processor import OpenAIProcessor
+        from ollama_processor import OllamaProcessor
         
-        print("使用OpenAI进行智能分块...")
-        processor = OpenAIProcessor()
+        print("使用Ollama进行智能分块...")
+        processor = OllamaProcessor()
         chunks = processor.intelligent_chunk_document(parsed_content)
         
         print(f"智能分块完成，共 {len(chunks)} 块")
         return chunks
         
     except Exception as e:
-        print(f"OpenAI智能分块失败，使用备用方案: {str(e)}")
+        print(f"Ollama智能分块失败，使用备用方案: {str(e)}")
         return fallback_chunking(parsed_content)
 
 def fallback_chunking(parsed_content: dict) -> list:
@@ -249,17 +267,17 @@ def fallback_chunking(parsed_content: dict) -> list:
 def generate_embeddings(chunks: list) -> list:
     """生成向量嵌入"""
     try:
-        from openai_processor import OpenAIProcessor
+        from ollama_processor import OllamaProcessor
         
-        print("使用OpenAI生成向量嵌入...")
-        processor = OpenAIProcessor()
+        print("使用Ollama生成向量嵌入...")
+        processor = OllamaProcessor()
         embeddings = processor.generate_embeddings(chunks)
         
         print(f"向量化完成，生成 {len(embeddings)} 个向量")
         return embeddings
         
     except Exception as e:
-        print(f"OpenAI向量化失败，使用随机向量: {str(e)}")
+        print(f"Ollama向量化失败，使用随机向量: {str(e)}")
         return fallback_embeddings(chunks)
 
 def fallback_embeddings(chunks: list) -> list:
@@ -268,7 +286,7 @@ def fallback_embeddings(chunks: list) -> list:
     embeddings = []
     for chunk in chunks:
         # 生成随机向量（实际应用中不建议）
-        embedding = [random.random() for _ in range(1536)]
+        embedding = [random.random() for _ in range(768)]  # Ollama nomic-embed-text维度
         embeddings.append(embedding)
     return embeddings
 

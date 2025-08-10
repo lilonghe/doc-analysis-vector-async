@@ -1,0 +1,4 @@
+venv
+__*
+node_modules
+chroma_db
