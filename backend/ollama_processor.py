@@ -6,12 +6,12 @@ Ollama API集成模块
 import os
 import requests
 from typing import List, Dict, Any, Optional
-from dotenv import load_dotenv
 import json
 import re
 
-# 加载环境变量
-load_dotenv()
+# 优先使用环境变量，不加载.env文件覆盖
+# from dotenv import load_dotenv
+# load_dotenv()
 
 class OllamaProcessor:
     """Ollama处理器"""
