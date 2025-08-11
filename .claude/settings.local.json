@@ -2,7 +2,20 @@
   "permissions": {
     "allow": [
       "Bash(chmod:*)",
-      "Bash(python:*)"
+      "Bash(python:*)",
+      "Bash(docker-compose down:*)",
+      "Bash(docker-compose up:*)",
+      "Bash(docker-compose logs:*)",
+      "Bash(docker exec:*)",
+      "WebFetch(domain:gcore.jsdelivr.net)",
+      "Bash(mkdir:*)",
+      "Bash(docker-compose stop:*)",
+      "Bash(docker-compose restart:*)",
+      "Bash(docker-compose:*)",
+      "Bash(ls:*)",
+      "Bash(docker inspect:*)",
+      "Bash(cat:*)",
+      "Bash(grep:*)"
     ],
     "deny": []
   }

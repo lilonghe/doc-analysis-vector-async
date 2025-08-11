@@ -1,0 +1,32 @@
+# 可选的MinerU服务配置
+# 运行: docker-compose -f docker-compose.yml -f docker-compose.mineru.yml up -d --build mineru
+
+version: '3.8'
+
+services:
+  # MinerU 文档解析服务 (可选)
+  mineru:
+    build: ./mineru
+    container_name: doc-analysis-mineru
+    ports:
+      - "8888:8888"
+    volumes:
+      - ./uploads:/app/uploads
+      - ./temp:/app/temp
+    environment:
+      - MINERU_API_HOST=0.0.0.0
+      - MINERU_API_PORT=8888
+    healthcheck:
+      test: ["CMD-SHELL", "timeout 5s bash -c '</dev/tcp/localhost/8888' || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    restart: unless-stopped
+
+  # 更新Celery worker以支持MinerU
+  celery-worker:
+    environment:
+      - MINERU_HOST=mineru
+      - MINERU_PORT=8888
+    depends_on:
+      - mineru

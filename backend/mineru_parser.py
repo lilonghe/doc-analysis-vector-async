@@ -1,30 +1,22 @@
 """
-MinerU文档解析模块
-使用MinerU进行高质量PDF文档解析
+PDF文档解析模块
+目前使用PyPDF2实现基础功能，后续可升级到MinerU
 """
 
 import os
-import sys
-import json
-import tempfile
-import shutil
-from pathlib import Path
-from typing import Dict, Any, Optional
+from typing import Dict, Any
 import traceback
-
-try:
-    from magic_pdf.api import convert_pdf_to_markdown
-    MINERU_AVAILABLE = True
-except ImportError:
-    MINERU_AVAILABLE = False
-    print("Warning: MinerU not available, using fallback parser")
 
 
 class MinerUParser:
-    """MinerU文档解析器"""
+    """PDF文档解析器"""
     
-    def __init__(self):
-        self.temp_dir = None
+    def __init__(self, api_host: str = None, api_port: int = None):
+        """
+        初始化PDF解析器
+        """
+        self.host = api_host or os.getenv('MINERU_HOST', 'localhost')
+        self.port = api_port or int(os.getenv('MINERU_PORT', '8888'))
         
     def parse_pdf(self, pdf_path: str) -> Dict[str, Any]:
         """
@@ -39,142 +31,13 @@ class MinerUParser:
         if not os.path.exists(pdf_path):
             raise FileNotFoundError(f"PDF文件不存在: {pdf_path}")
             
-        if not MINERU_AVAILABLE:
-            return self._fallback_parse(pdf_path)
-            
         try:
-            # 创建临时目录
-            self.temp_dir = tempfile.mkdtemp(prefix="mineru_")
-            output_dir = os.path.join(self.temp_dir, "output")
-            os.makedirs(output_dir, exist_ok=True)
-            
-            # 使用MinerU转换PDF到Markdown
-            result = convert_pdf_to_markdown(
-                pdf_path=pdf_path,
-                output_dir=output_dir,
-                ocr_lang="zh-CN",  # 支持中文OCR
-                parse_method="auto",  # 自动选择解析方法
-                output_format="markdown"
-            )
-            
-            # 解析结果
-            parsed_result = self._process_mineru_result(result, output_dir)
-            
-            return parsed_result
+            print(f"📄 使用PyPDF2解析PDF: {os.path.basename(pdf_path)}")
+            return self._pypdf2_parse(pdf_path)
             
         except Exception as e:
-            print(f"MinerU解析失败: {str(e)}")
+            print(f"PDF解析失败: {str(e)}")
             print(traceback.format_exc())
-            # 降级到备用解析方法
-            return self._fallback_parse(pdf_path)
-            
-        finally:
-            # 清理临时文件
-            self._cleanup()
-    
-    def _process_mineru_result(self, result: Any, output_dir: str) -> Dict[str, Any]:
-        """处理MinerU解析结果"""
-        parsed_data = {
-            "content": "",
-            "metadata": {
-                "total_pages": 0,
-                "tables_count": 0,
-                "images_count": 0,
-                "formulas_count": 0
-            },
-            "tables": [],
-            "images": [],
-            "structure": {
-                "headings": [],
-                "paragraphs": [],
-                "lists": []
-            }
-        }
-        
-        try:
-            # 查找输出的markdown文件
-            markdown_files = list(Path(output_dir).glob("*.md"))
-            if markdown_files:
-                markdown_path = markdown_files[0]
-                with open(markdown_path, 'r', encoding='utf-8') as f:
-                    content = f.read()
-                    
-                parsed_data["content"] = content
-                
-                # 简单统计
-                parsed_data["metadata"]["total_pages"] = content.count("---")
-                parsed_data["metadata"]["tables_count"] = content.count("|")
-                parsed_data["metadata"]["images_count"] = content.count("![")
-                parsed_data["metadata"]["formulas_count"] = content.count("$$")
-                
-                # 提取结构信息
-                lines = content.split('\n')
-                for line in lines:
-                    line = line.strip()
-                    if line.startswith('#'):
-                        # 标题
-                        level = len(line) - len(line.lstrip('#'))
-                        title = line.lstrip('# ').strip()
-                        if title:
-                            parsed_data["structure"]["headings"].append({
-                                "level": level,
-                                "title": title
-                            })
-                    elif line and not line.startswith('#') and not line.startswith('|'):
-                        # 段落
-                        if len(line) > 10:  # 忽略太短的行
-                            parsed_data["structure"]["paragraphs"].append(line)
-            
-            # 查找JSON输出文件（如果有）
-            json_files = list(Path(output_dir).glob("*.json"))
-            if json_files:
-                with open(json_files[0], 'r', encoding='utf-8') as f:
-                    json_data = json.load(f)
-                    # 可以从JSON中提取更详细的结构信息
-                    if "tables" in json_data:
-                        parsed_data["tables"] = json_data["tables"]
-                    if "images" in json_data:
-                        parsed_data["images"] = json_data["images"]
-                        
-        except Exception as e:
-            print(f"处理MinerU结果时出错: {str(e)}")
-            
-        return parsed_data
-    
-    def _fallback_parse(self, pdf_path: str) -> Dict[str, Any]:
-        """备用解析方法，使用PyPDF2"""
-        try:
-            import PyPDF2
-            
-            with open(pdf_path, 'rb') as file:
-                pdf_reader = PyPDF2.PdfReader(file)
-                content = ""
-                
-                for page_num, page in enumerate(pdf_reader.pages):
-                    page_text = page.extract_text()
-                    content += f"\n--- 第{page_num + 1}页 ---\n"
-                    content += page_text + "\n"
-                
-                return {
-                    "content": content,
-                    "metadata": {
-                        "total_pages": len(pdf_reader.pages),
-                        "tables_count": 0,
-                        "images_count": 0,
-                        "formulas_count": 0,
-                        "parser": "PyPDF2"
-                    },
-                    "tables": [],
-                    "images": [],
-                    "structure": {
-                        "headings": [],
-                        "paragraphs": content.split('\n'),
-                        "lists": []
-                    }
-                }
-                
-        except Exception as e:
-            print(f"备用解析也失败: {str(e)}")
             return {
                 "content": f"解析失败: {str(e)}",
                 "metadata": {"total_pages": 0, "parser": "failed"},
@@ -183,27 +46,95 @@ class MinerUParser:
                 "structure": {"headings": [], "paragraphs": [], "lists": []}
             }
     
-    def _cleanup(self):
-        """清理临时文件"""
-        if self.temp_dir and os.path.exists(self.temp_dir):
-            try:
-                shutil.rmtree(self.temp_dir)
-            except Exception as e:
-                print(f"清理临时文件失败: {str(e)}")
+    def _pypdf2_parse(self, pdf_path: str) -> Dict[str, Any]:
+        """使用PyPDF2解析PDF"""
+        try:
+            import PyPDF2
+            
+            with open(pdf_path, 'rb') as file:
+                pdf_reader = PyPDF2.PdfReader(file)
+                content = ""
+                total_pages = len(pdf_reader.pages)
+                
+                print(f"📖 开始解析 {total_pages} 页PDF文档...")
+                
+                for page_num, page in enumerate(pdf_reader.pages):
+                    try:
+                        page_text = page.extract_text()
+                        content += f"\n=== 第 {page_num + 1} 页 ===\n"
+                        content += page_text + "\n"
+                        
+                        if (page_num + 1) % 5 == 0:  # 每5页打印一次进度
+                            print(f"📄 已解析 {page_num + 1}/{total_pages} 页")
+                            
+                    except Exception as e:
+                        print(f"⚠️ 第{page_num + 1}页解析出错: {str(e)}")
+                        content += f"\n=== 第 {page_num + 1} 页 (解析失败) ===\n"
+                        content += f"解析错误: {str(e)}\n"
+                
+                # 简单的内容分析
+                lines = content.split('\n')
+                paragraphs = [line.strip() for line in lines if line.strip() and len(line.strip()) > 10]
+                
+                # 统计信息
+                tables_count = content.count('|') // 10  # 简单估算表格数量
+                
+                result = {
+                    "content": content,
+                    "metadata": {
+                        "total_pages": total_pages,
+                        "tables_count": tables_count,
+                        "images_count": 0,  # PyPDF2无法提取图片
+                        "formulas_count": content.count('$') // 2,  # 简单估算公式
+                        "parser": "PyPDF2",
+                        "content_length": len(content)
+                    },
+                    "tables": [],  # PyPDF2无法提取结构化表格
+                    "images": [],  # PyPDF2无法提取图片
+                    "structure": {
+                        "headings": self._extract_headings(content),
+                        "paragraphs": paragraphs[:50],  # 限制段落数量
+                        "lists": []
+                    }
+                }
+                
+                print(f"✅ PyPDF2解析完成: {total_pages} 页，{len(content)} 字符")
+                return result
+                
+        except ImportError:
+            raise Exception("PyPDF2 未安装，无法解析PDF")
+        except Exception as e:
+            print(f"PyPDF2解析失败: {str(e)}")
+            raise
+    
+    def _extract_headings(self, content: str) -> list:
+        """从内容中提取可能的标题"""
+        lines = content.split('\n')
+        headings = []
+        
+        for line in lines:
+            line = line.strip()
+            # 简单的标题识别规则
+            if (line and len(line) < 100 and  # 不太长
+                any(char.isdigit() for char in line) and  # 包含数字
+                (line.endswith('。') or line.endswith('.') or  # 以句号结尾
+                 any(word in line for word in ['章', '节', '部分', '摘要', '结论', 'Chapter', 'Section']))):  # 包含关键词
+                headings.append({
+                    "level": 1,  # 简单设为1级标题
+                    "title": line[:50]  # 限制标题长度
+                })
+                
+        return headings[:10]  # 限制标题数量
 
 
 def test_mineru_parser():
-    """测试MinerU解析器"""
+    """测试PDF解析器"""
     parser = MinerUParser()
     
-    # 创建一个简单的测试
-    print("MinerU解析器测试:")
-    print(f"MinerU可用: {MINERU_AVAILABLE}")
-    
-    if MINERU_AVAILABLE:
-        print("✅ MinerU已安装")
-    else:
-        print("⚠️  MinerU未安装，将使用PyPDF2备用解析")
+    print("PDF解析器测试:")
+    print("✅ 使用PyPDF2作为PDF解析引擎")
+    print("📋 功能: 提取文本内容、基础结构分析")
+    print("⚠️  限制: 无法提取图片、表格结构")
 
 
 if __name__ == "__main__":

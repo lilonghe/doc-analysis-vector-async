@@ -6,6 +6,7 @@ import uuid
 import os
 from datetime import datetime
 from database import get_database_manager, file_record_to_dict
+from chroma_db import ChromaVectorDB
 
 app = FastAPI(title="Document Vector Processing API")
 
@@ -20,6 +21,16 @@ app.add_middleware(
 
 # 数据库管理器
 db_manager = get_database_manager()
+
+# 全局ChromaDB实例
+vector_db = None
+
+def get_vector_db():
+    """获取ChromaDB实例（单例模式）"""
+    global vector_db
+    if vector_db is None:
+        vector_db = ChromaVectorDB()
+    return vector_db
 
 # 确保上传目录存在
 UPLOAD_DIR = "uploads"
@@ -148,8 +159,7 @@ async def delete_file(file_id: str):
         
         # 删除向量数据库中的数据
         try:
-            from chroma_db import ChromaVectorDB
-            db = ChromaVectorDB()
+            db = get_vector_db()
             db.delete_file_chunks(file_id)
         except Exception as e:
             print(f"删除向量数据失败: {str(e)}")
@@ -171,8 +181,6 @@ async def delete_file(file_id: str):
 async def search_documents(query: dict):
     """向量搜索文档"""
     try:
-        from chroma_db import ChromaVectorDB
-        
         query_text = query.get("query", "")
         n_results = query.get("n_results", 5)
         file_id = query.get("file_id")  # 可选：限制搜索特定文件
@@ -180,7 +188,7 @@ async def search_documents(query: dict):
         if not query_text.strip():
             raise HTTPException(status_code=400, detail="查询文本不能为空")
         
-        db = ChromaVectorDB()
+        db = get_vector_db()
         results = db.search_similar_documents(
             query_text=query_text,
             n_results=n_results,
@@ -203,9 +211,8 @@ async def get_database_stats():
         
         # 获取向量数据库统计
         try:
-            from chroma_db import ChromaVectorDB
-            vector_db = ChromaVectorDB()
-            vector_stats = vector_db.get_collection_stats()
+            vector_db_instance = get_vector_db()
+            vector_stats = vector_db_instance.get_collection_stats()
         except Exception as e:
             print(f"获取向量数据库统计失败: {str(e)}")
             vector_stats = {"error": "无法获取向量数据库统计"}
@@ -224,14 +231,12 @@ async def get_database_stats():
 async def get_file_chunks(file_id: str):
     """获取文件的所有文档块"""
     try:
-        from chroma_db import ChromaVectorDB
-        
         # 检查文件是否存在
         file_record = db_manager.get_file_record(file_id)
         if not file_record:
             raise HTTPException(status_code=404, detail="文件不存在")
         
-        db = ChromaVectorDB()
+        db = get_vector_db()
         chunks = db.get_file_chunks(file_id)
         
         return {"file_id": file_id, "chunks": chunks}
@@ -282,4 +287,4 @@ async def cleanup_old_records():
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8989)
+    uvicorn.run(app, host="0.0.0.0", port=8080)

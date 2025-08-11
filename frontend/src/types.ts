@@ -20,3 +20,18 @@ export interface UploadResponse {
 export interface StatusResponse {
   files: FileInfo[];
 }
+
+export interface DocumentChunk {
+  id: string;
+  content: string;
+  metadata: {
+    file_id: string;
+    filename: string;
+    chunk_index: number;
+    chunk_title: string;
+    chunk_summary: string;
+    chunk_type: string;
+    created_at: string;
+    content_length: number;
+  };
+}

@@ -1,6 +1,8 @@
-import React from 'react';
-import { FileText, Trash2, AlertCircle, CheckCircle, Clock, Loader } from 'lucide-react';
-import { FileInfo } from '../types';
+import React, { useState } from 'react';
+import { FileText, Trash2, AlertCircle, CheckCircle, Clock, Loader, Eye } from 'lucide-react';
+import { FileInfo, DocumentChunk } from '../types';
+import { api } from '../api';
+import DocumentChunksModal from './DocumentChunksModal';
 
 interface FileListProps {
   files: FileInfo[];
@@ -41,6 +43,39 @@ const statusMessages = {
 };
 
 const FileList: React.FC<FileListProps> = ({ files, onDeleteFile }) => {
+  const [selectedFile, setSelectedFile] = useState<string | null>(null);
+  const [chunks, setChunks] = useState<DocumentChunk[]>([]);
+  const [isLoadingChunks, setIsLoadingChunks] = useState(false);
+  const [modalOpen, setModalOpen] = useState(false);
+
+  const handleViewChunks = async (file: FileInfo) => {
+    if (file.status !== 'completed') return;
+    
+    setSelectedFile(file.id);
+    setModalOpen(true);
+    setIsLoadingChunks(true);
+    setChunks([]);
+
+    try {
+      const response = await api.getFileChunks(file.id);
+      setChunks(response.chunks || []);
+    } catch (error) {
+      console.error('Failed to fetch chunks:', error);
+      setChunks([]);
+    } finally {
+      setIsLoadingChunks(false);
+    }
+  };
+
+  const closeModal = () => {
+    setModalOpen(false);
+    setSelectedFile(null);
+    setChunks([]);
+  };
+
+  const selectedFileName = selectedFile ? 
+    files.find(f => f.id === selectedFile)?.filename || '' : '';
+
   const getProgressColor = (status: string, progress: number) => {
     if (status === 'error') return 'bg-red-500';
     if (status === 'completed') return 'bg-green-500';
@@ -71,7 +106,10 @@ const FileList: React.FC<FileListProps> = ({ files, onDeleteFile }) => {
           return (
             <div
               key={file.id}
-              className="bg-white dark:bg-gray-800 rounded-lg shadow-sm border border-gray-200 dark:border-gray-700 p-4"
+              className={`bg-white dark:bg-gray-800 rounded-lg shadow-sm border border-gray-200 dark:border-gray-700 p-4 ${
+                file.status === 'completed' ? 'cursor-pointer hover:shadow-md transition-shadow' : ''
+              }`}
+              onClick={() => file.status === 'completed' && handleViewChunks(file)}
             >
               <div className="flex items-start justify-between">
                 <div className="flex items-start space-x-3 flex-1">
@@ -80,9 +118,23 @@ const FileList: React.FC<FileListProps> = ({ files, onDeleteFile }) => {
                   </div>
                   
                   <div className="flex-1 min-w-0">
-                    <h3 className="text-sm font-medium text-gray-900 dark:text-white truncate">
-                      {file.filename}
-                    </h3>
+                    <div className="flex items-center justify-between">
+                      <h3 className="text-sm font-medium text-gray-900 dark:text-white truncate">
+                        {file.filename}
+                      </h3>
+                      {file.status === 'completed' && (
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleViewChunks(file);
+                          }}
+                          className="ml-2 p-1 text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300 transition-colors"
+                          title="查看文档块"
+                        >
+                          <Eye className="h-4 w-4" />
+                        </button>
+                      )}
+                    </div>
                     
                     <div className="mt-2">
                       <div className="flex items-center space-x-2 mb-2">
@@ -108,12 +160,20 @@ const FileList: React.FC<FileListProps> = ({ files, onDeleteFile }) => {
                           {new Date(file.updated_at).toLocaleTimeString()}
                         </span>
                       </div>
+                      {file.status === 'completed' && (
+                        <p className="text-xs text-blue-600 dark:text-blue-400 mt-1">
+                          点击查看文档块详情
+                        </p>
+                      )}
                     </div>
                   </div>
                 </div>
 
                 <button
-                  onClick={() => onDeleteFile(file.id)}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onDeleteFile(file.id);
+                  }}
                   className="flex-shrink-0 ml-4 p-2 text-gray-400 hover:text-red-500 transition-colors"
                   title="删除文件"
                 >
@@ -124,6 +184,14 @@ const FileList: React.FC<FileListProps> = ({ files, onDeleteFile }) => {
           );
         })}
       </div>
+      
+      <DocumentChunksModal
+        isOpen={modalOpen}
+        onClose={closeModal}
+        fileName={selectedFileName}
+        chunks={chunks}
+        isLoading={isLoadingChunks}
+      />
     </div>
   );
 };

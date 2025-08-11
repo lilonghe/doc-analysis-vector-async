@@ -3,7 +3,7 @@
 使用SQLAlchemy + PostgreSQL进行状态持久化存储
 """
 
-from sqlalchemy import create_engine, Column, String, Integer, DateTime, Text, Float, BigInteger
+from sqlalchemy import create_engine, Column, String, Integer, DateTime, Text, Float, BigInteger, func
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, Session
 from sqlalchemy.dialects.postgresql import UUID
@@ -246,10 +246,8 @@ class DatabaseManager:
             ).count()
             pending_files = db.query(FileRecord).filter(FileRecord.status == "pending").count()
             
-            total_chunks = 0
-            # db.query(FileRecord).with_entities(
-            #     db.func.sum(FileRecord.chunks_count)
-            # ).scalar() or 0
+            total_chunks_result = db.query(func.sum(FileRecord.chunks_count)).scalar()
+            total_chunks = int(total_chunks_result or 0)
             
             return {
                 "total_files": total_files,
@@ -257,7 +255,7 @@ class DatabaseManager:
                 "error_files": error_files,
                 "processing_files": processing_files,
                 "pending_files": pending_files,
-                "total_chunks": int(total_chunks),
+                "total_chunks": total_chunks,
                 "success_rate": round(completed_files / max(total_files, 1) * 100, 2)
             }
         finally:
@@ -267,8 +265,8 @@ class DatabaseManager:
         """清理旧记录"""
         db = self.get_db()
         try:
-            from datetime import timedelta
-            cutoff_date = datetime.utcnow() - timedelta(days=days)
+            from datetime import timedelta, timezone
+            cutoff_date = datetime.now(timezone.utc) - timedelta(days=days)
             
             # 删除旧的已完成文件记录
             deleted_files = db.query(FileRecord).filter(

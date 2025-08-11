@@ -84,7 +84,7 @@ redis-server
 
 # 2. 启动后端 API (终端1)
 cd backend
-uvicorn main:app --reload --port 8000
+uvicorn main:app --reload --port 8989
 
 # 3. 启动 Celery Worker (终端2) 
 cd backend
@@ -97,8 +97,8 @@ npm run dev
 
 ### 5. 访问系统
 - **前端界面**: http://localhost:3000
-- **后端 API**: http://localhost:8000
-- **API 文档**: http://localhost:8000/docs
+- **后端 API**: http://localhost:8989
+- **API 文档**: http://localhost:8989/docs
 
 ## 💡 使用说明
 

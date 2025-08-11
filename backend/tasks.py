@@ -12,12 +12,31 @@ from error_handler import (
     RetryableError,
     NonRetryableError
 )
+from dotenv import load_dotenv
+from chroma_db import ChromaVectorDB
 
-# 创建Celery实例（仍然使用Redis作为消息代理）
+# 加载环境变量
+load_dotenv()
+
+# 全局ChromaDB实例（对于Celery worker）
+_vector_db = None
+
+def get_vector_db():
+    """获取ChromaDB实例（单例模式）"""
+    global _vector_db
+    if _vector_db is None:
+        print("🔗 初始化ChromaDB连接...")
+        _vector_db = ChromaVectorDB()
+    return _vector_db
+
+# 获取Redis URL，支持环境变量配置
+REDIS_URL = os.getenv('REDIS_URL', 'redis://localhost:6379/0')
+
+# 创建Celery实例
 celery_app = Celery(
     'doc_processor',
-    broker='redis://localhost:6379/0',
-    backend='redis://localhost:6379/0'
+    broker=REDIS_URL,
+    backend=REDIS_URL
 )
 
 # Celery配置 - 增强可靠性
@@ -92,17 +111,20 @@ def process_document(self, file_id: str):
         filepath = file_record.filepath
         filename = file_record.filename
         
-        print(f"开始处理文件: {filename}")
+        print(f"🚀 [CELERY] 开始处理文档任务: {file_id}")
+        print(f"📄 [CELERY] 文件信息: {filename} ({filepath})")
         
         # 记录开始时间
         import time
         start_time = time.time()
         
         # 阶段1: MinerU解析文档（带重试）
+        print(f"🔍 [CELERY] 阶段1: 开始MinerU解析...")
         update_file_status(file_id, "parsing", 10, "MinerU解析中...")
         parsing_start = time.time()
         extracted_content = parse_document_with_retry(file_id, filepath)
         parsing_duration = time.time() - parsing_start
+        print(f"✅ [CELERY] 阶段1完成: 解析耗时 {parsing_duration:.2f}s")
         db_manager.log_processing_stage(file_id, "parsing", "completed", "文档解析完成", parsing_duration)
         
         # 更新文档页数
@@ -112,39 +134,47 @@ def process_document(self, file_id: str):
         update_file_status(file_id, "parsing", 30, "文档解析完成")
         
         # 阶段2: 智能分块（带重试）
+        print(f"✂️ [CELERY] 阶段2: 开始智能分块...")
         update_file_status(file_id, "chunking", 40, "智能分块中...")
         chunking_start = time.time()
         chunks = chunk_document_with_retry(file_id, extracted_content)
         chunking_duration = time.time() - chunking_start
+        print(f"✅ [CELERY] 阶段2完成: 分块耗时 {chunking_duration:.2f}s，共生成 {len(chunks)} 块")
         db_manager.log_processing_stage(file_id, "chunking", "completed", f"分块完成，共{len(chunks)}块", chunking_duration)
         
         # 更新块数量
         db_manager.update_file_results(file_id, chunks_count=len(chunks))
         
         update_file_status(file_id, "chunking", 60, f"分块完成，共{len(chunks)}块")
+        print(f"📊 [CELERY] 分块统计: {len(chunks)} 个文档块")
         
         # 阶段3: 向量化（带重试）
+        print(f"🧮 [CELERY] 阶段3: 开始向量化...")
         update_file_status(file_id, "embedding", 70, "向量化中...")
         embedding_start = time.time()
         embeddings = generate_embeddings_with_retry(file_id, chunks)
         embedding_duration = time.time() - embedding_start
+        print(f"✅ [CELERY] 阶段3完成: 向量化耗时 {embedding_duration:.2f}s，共{len(embeddings)}个向量")
         db_manager.log_processing_stage(file_id, "embedding", "completed", "向量化完成", embedding_duration)
         
         update_file_status(file_id, "embedding", 90, "向量化完成")
         
         # 阶段4: 存储到向量数据库（带重试）
-        update_file_status(file_id, "storing", 95, "存储到数据库...")
+        print(f"💾 [CELERY] 阶段4: 开始存储向量...")
+        update_file_status(file_id, "storing", 95, "存储向量中...")
         storing_start = time.time()
         store_with_retry(file_id, chunks, embeddings)
         storing_duration = time.time() - storing_start
-        db_manager.log_processing_stage(file_id, "storing", "completed", "存储完成", storing_duration)
+        print(f"✅ [CELERY] 阶段4完成: 存储耗时 {storing_duration:.2f}s")
+        db_manager.log_processing_stage(file_id, "storing", "completed", "向量存储完成", storing_duration)
         
         # 完成
         total_duration = time.time() - start_time
         completion_message = f"✅ 处理完成 (耗时: {total_duration:.1f}秒)"
         update_file_status(file_id, "completed", 100, completion_message)
         
-        print(f"文件处理完成: {filename}, 总耗时: {total_duration:.1f}秒")
+        print(f"🎉 [CELERY] 任务完成: {filename} 处理成功，总耗时 {total_duration:.2f}s")
+        print(f"📈 [CELERY] 处理统计: {len(chunks)} 块，{total_duration:.1f}s 完成")
         
         return {
             "file_id": file_id,
@@ -293,11 +323,10 @@ def fallback_embeddings(chunks: list) -> list:
 def store_to_vector_db(file_id: str, chunks: list, embeddings: list):
     """存储到向量数据库"""
     try:
-        from chroma_db import ChromaVectorDB
         from database import get_database_manager
         
         print("存储到ChromaDB向量数据库...")
-        db = ChromaVectorDB()
+        db = get_vector_db()
         db_manager = get_database_manager()
         
         # 获取文件信息

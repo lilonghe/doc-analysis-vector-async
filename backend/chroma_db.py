@@ -5,7 +5,6 @@ ChromaDB向量数据库集成模块
 
 import os
 import chromadb
-from chromadb.config import Settings
 from typing import List, Dict, Any, Optional
 import uuid
 import json
@@ -15,19 +14,34 @@ from datetime import datetime
 class ChromaVectorDB:
     """ChromaDB向量数据库管理器"""
     
-    def __init__(self, persist_directory: str = "./chroma_db"):
+    def __init__(self, host: str = None, port: int = None, persist_directory: str = "./chroma_db"):
         """
         初始化ChromaDB
         
         Args:
-            persist_directory: 数据库持久化目录
+            host: ChromaDB服务器主机 (用于Docker环境)
+            port: ChromaDB服务器端口
+            persist_directory: 数据库持久化目录 (本地模式)
         """
-        self.persist_directory = persist_directory
-        os.makedirs(persist_directory, exist_ok=True)
+        # 从环境变量获取配置
+        chroma_host = host or os.getenv('CHROMA_HOST')
+        chroma_port = port or int(os.getenv('CHROMA_PORT', '8000'))
         
         try:
-            # 创建ChromaDB客户端
-            self.client = chromadb.PersistentClient(path=persist_directory)
+            if chroma_host and chroma_host != 'localhost':
+                # Docker环境，连接到ChromaDB服务
+                print(f"🔗 连接到ChromaDB服务: {chroma_host}:{chroma_port}")
+                self.client = chromadb.HttpClient(
+                    host=chroma_host,
+                    port=chroma_port
+                )
+                self.persist_directory = None  # HTTP客户端没有持久化目录
+            else:
+                # 本地环境，使用持久化客户端
+                print(f"📁 使用本地ChromaDB: {persist_directory}")
+                self.persist_directory = persist_directory
+                os.makedirs(persist_directory, exist_ok=True)
+                self.client = chromadb.PersistentClient(path=persist_directory)
             
             # 获取或创建集合
             self.collection = self.client.get_or_create_collection(
@@ -35,7 +49,8 @@ class ChromaVectorDB:
                 metadata={"description": "文档向量存储集合"}
             )
             
-            print(f"✅ ChromaDB初始化成功，存储路径: {persist_directory}")
+            # 减少日志频率，只在调试时显示
+            # print(f"✅ ChromaDB初始化成功")
             
         except Exception as e:
             print(f"❌ ChromaDB初始化失败: {str(e)}")
@@ -72,12 +87,12 @@ class ChromaVectorDB:
                 
                 # 元数据
                 metadata = {
-                    "file_id": file_id,
-                    "filename": filename,
+                    "file_id": str(file_id),  # 确保UUID转换为字符串
+                    "filename": str(filename),
                     "chunk_index": i,
-                    "chunk_title": chunk.get('title', ''),
-                    "chunk_summary": chunk.get('summary', ''),
-                    "chunk_type": chunk.get('type', 'unknown'),
+                    "chunk_title": str(chunk.get('title', '')),
+                    "chunk_summary": str(chunk.get('summary', '')),
+                    "chunk_type": str(chunk.get('type', 'unknown')),
                     "created_at": datetime.now().isoformat(),
                     "content_length": len(chunk.get('content', ''))
                 }
@@ -114,7 +129,7 @@ class ChromaVectorDB:
             # 构建查询条件
             where_clause = {}
             if file_id:
-                where_clause["file_id"] = file_id
+                where_clause["file_id"] = str(file_id)
             
             # 执行搜索
             results = self.collection.query(
@@ -153,7 +168,7 @@ class ChromaVectorDB:
         """
         try:
             results = self.collection.get(
-                where={"file_id": file_id}
+                where={"file_id": str(file_id)}
             )
             
             chunks = []
@@ -187,7 +202,7 @@ class ChromaVectorDB:
         try:
             # 获取要删除的块ID
             results = self.collection.get(
-                where={"file_id": file_id}
+                where={"file_id": str(file_id)}
             )
             
             if results['ids']:
@@ -225,7 +240,8 @@ class ChromaVectorDB:
                 "total_files": len(file_ids),
                 "total_chunks": total_chunks,
                 "collection_name": self.collection.name,
-                "persist_directory": self.persist_directory
+                "storage_mode": "HTTP" if self.persist_directory is None else "Persistent",
+                "persist_directory": self.persist_directory or "N/A (HTTP Mode)"
             }
             
             return stats
