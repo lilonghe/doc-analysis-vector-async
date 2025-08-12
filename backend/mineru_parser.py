@@ -1,6 +1,6 @@
 """
 PDF文档解析模块
-目前使用PyPDF2实现基础功能，后续可升级到MinerU
+使用PyPDF2进行PDF文档解析
 """
 
 import os
@@ -15,8 +15,8 @@ class MinerUParser:
         """
         初始化PDF解析器
         """
-        self.host = api_host or os.getenv('MINERU_HOST', 'localhost')
-        self.port = api_port or int(os.getenv('MINERU_PORT', '8888'))
+        # 保留参数以兼容旧版本调用
+        pass
         
     def parse_pdf(self, pdf_path: str) -> Dict[str, Any]:
         """
@@ -134,7 +134,7 @@ def test_mineru_parser():
     print("PDF解析器测试:")
     print("✅ 使用PyPDF2作为PDF解析引擎")
     print("📋 功能: 提取文本内容、基础结构分析")
-    print("⚠️  限制: 无法提取图片、表格结构")
+    print("⚠️  限制: 无法提取图片、表格结构，但稳定可靠")
 
 
 if __name__ == "__main__":

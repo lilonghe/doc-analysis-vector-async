@@ -16,7 +16,9 @@
       "Bash(docker inspect:*)",
       "Bash(cat:*)",
       "Bash(grep:*)",
-      "Bash(curl:*)"
+      "Bash(curl:*)",
+      "Bash(docker stop:*)",
+      "Bash(docker build:*)"
     ],
     "deny": []
   }
