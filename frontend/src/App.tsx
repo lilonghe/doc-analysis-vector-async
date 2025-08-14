@@ -28,7 +28,7 @@ function App() {
   const fetchDatabaseStats = useCallback(async () => {
     try {
       const response = await api.getDatabaseStats();
-      setDatabaseStats(response.stats);
+      setDatabaseStats(response.stats || []);
     } catch (err) {
       console.error('Failed to fetch database stats:', err);
     }

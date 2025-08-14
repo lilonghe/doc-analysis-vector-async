@@ -18,7 +18,10 @@
       "Bash(grep:*)",
       "Bash(curl:*)",
       "Bash(docker stop:*)",
-      "Bash(docker build:*)"
+      "Bash(docker build:*)",
+      "Bash(go mod:*)",
+      "Bash(go get:*)",
+      "Bash(go build:*)"
     ],
     "deny": []
   }

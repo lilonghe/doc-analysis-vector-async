@@ -1,30 +1,10 @@
 version: '3.8'
 
 services:
-  # PostgreSQL 数据库
-  postgres:
-    image: postgres:15-alpine
-    container_name: doc-analysis-postgres
-    environment:
-      POSTGRES_DB: doc_analysis
-      POSTGRES_USER: doc_user
-      POSTGRES_PASSWORD: doc_password
-    ports:
-      - "5432:5432"
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-      - ./init.sql:/docker-entrypoint-initdb.d/init.sql
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U doc_user -d doc_analysis"]
-      interval: 30s
-      timeout: 10s
-      retries: 5
-    restart: unless-stopped
-
-  # Redis (带持久化)
+  # Redis (任务队列)
   redis:
     image: redis:7-alpine
-    container_name: doc-analysis-redis
+    container_name: doc-analysis-redis-go
     command: redis-server --appendonly yes --appendfsync everysec
     ports:
       - "6379:6379"
@@ -32,15 +12,15 @@ services:
       - redis_data:/data
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
-      interval: 30s
-      timeout: 10s
-      retries: 5
+      interval: 10s
+      timeout: 5s
+      retries: 3
     restart: unless-stopped
 
   # ChromaDB 向量数据库
   chromadb:
     image: chromadb/chroma:latest
-    container_name: doc-analysis-chromadb
+    container_name: doc-analysis-chromadb-go
     ports:
       - "8000:8000"
     volumes:
@@ -48,57 +28,56 @@ services:
     environment:
       - CHROMA_SERVER_HOST=0.0.0.0
     healthcheck:
-      test: ["CMD-SHELL", "timeout 5s bash -c '</dev/tcp/localhost/8000' || exit 1"]
-      interval: 30s
-      timeout: 10s
-      retries: 5
+      test: ["CMD-SHELL", "curl -f http://localhost:8000/api/v1/heartbeat || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
     restart: unless-stopped
 
-  # Go 后端服务 (替换原 Python 后端)
-  backend:
+  # Go 后端服务
+  backend-go:
     build: 
       context: ./backend-go
       dockerfile: Dockerfile
     container_name: doc-analysis-backend-go
     ports:
-      - "8080:8080"
+      - "8081:8080"
     environment:
       - HOST=0.0.0.0
       - PORT=8080
-      - DATABASE_DRIVER=postgres
-      - DATABASE_URL=postgresql://doc_user:doc_password@postgres:5432/doc_analysis
+      - DATABASE_DRIVER=sqlite
+      - DATABASE_URL=/app/data.db
       - REDIS_HOST=redis
       - REDIS_PORT=6379
       - REDIS_PASSWORD=
       - CHROMA_HOST=chromadb
       - CHROMA_PORT=8000
     depends_on:
-      postgres:
-        condition: service_healthy
       redis:
         condition: service_healthy
       chromadb:
         condition: service_healthy
     volumes:
       - uploads_data:/app/uploads
+      - sqlite_data:/app
     healthcheck:
       test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:8080/health || exit 1"]
-      interval: 30s
+      interval: 15s
       timeout: 10s
       retries: 3
-      start_period: 40s
+      start_period: 30s
     restart: unless-stopped
 
 volumes:
-  postgres_data:
-    driver: local
   redis_data:
     driver: local
   chroma_data:
     driver: local
   uploads_data:
     driver: local
+  sqlite_data:
+    driver: local
 
 networks:
   default:
-    name: doc-analysis-network
+    name: doc-analysis-go-network
