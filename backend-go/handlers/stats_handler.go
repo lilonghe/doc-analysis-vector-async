@@ -3,7 +3,6 @@ package handlers
 import (
 	"doc-analysis-backend/database"
 	"doc-analysis-backend/models"
-	"doc-analysis-backend/utils"
 
 	"github.com/gin-gonic/gin"
 )
@@ -59,7 +58,7 @@ func (h *StatsHandler) GetDatabaseStats(c *gin.Context) {
 	}
 
 	// 返回与 Python 版本相同的数据结构
-	utils.Success(c, map[string]interface{}{
+	c.JSON(200, map[string]interface{}{
 		"stats": map[string]interface{}{
 			"total_files":      totalFiles,
 			"completed_files":  completedFiles,

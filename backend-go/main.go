@@ -53,6 +53,15 @@ func main() {
 		fileHandler := handlers.NewFileHandler()
 		statsHandler := handlers.NewStatsHandler()
 
+		// 添加 OPTIONS 处理器用于 CORS 预检
+		api.OPTIONS("/upload-files", func(c *gin.Context) { c.Status(200) })
+		api.OPTIONS("/files/status", func(c *gin.Context) { c.Status(200) })
+		api.OPTIONS("/files/:id/status", func(c *gin.Context) { c.Status(200) })
+		api.OPTIONS("/files/:id/process", func(c *gin.Context) { c.Status(200) })
+		api.OPTIONS("/process-all", func(c *gin.Context) { c.Status(200) })
+		api.OPTIONS("/files/:id", func(c *gin.Context) { c.Status(200) })
+		api.OPTIONS("/database/stats", func(c *gin.Context) { c.Status(200) })
+
 		// 文件上传和管理
 		api.POST("/upload-files", fileHandler.UploadFiles)
 		api.GET("/files/status", fileHandler.GetAllFilesStatus)
@@ -63,15 +72,6 @@ func main() {
 
 		// 统计功能
 		api.GET("/database/stats", statsHandler.GetDatabaseStats)
-
-		// TODO: 搜索功能
-		// api.POST("/search", searchHandler.Search)
-
-		// TODO: 文档块功能
-		// api.GET("/files/:id/chunks", fileHandler.GetFileChunks)
-
-		// TODO: 处理日志
-		// api.GET("/files/:id/logs", fileHandler.GetProcessingLogs)
 	}
 
 	// 启动服务器

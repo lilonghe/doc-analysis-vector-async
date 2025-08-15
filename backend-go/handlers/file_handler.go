@@ -25,13 +25,17 @@ func NewFileHandler() *FileHandler {
 }
 
 func (h *FileHandler) UploadFiles(c *gin.Context) {
+	fmt.Printf("Upload request received: Content-Type: %s\n", c.GetHeader("Content-Type"))
+	
 	form, err := c.MultipartForm()
 	if err != nil {
+		fmt.Printf("Multipart form error: %v\n", err)
 		utils.BadRequest(c, "无法解析表单数据")
 		return
 	}
 
 	files := form.File["files"]
+	fmt.Printf("Found %d files in form\n", len(files))
 	if len(files) == 0 {
 		utils.BadRequest(c, "未选择文件")
 		return
@@ -93,8 +97,10 @@ func (h *FileHandler) UploadFiles(c *gin.Context) {
 		})
 	}
 
-	utils.SuccessWithMessage(c, fmt.Sprintf("成功上传 %d 个文件", len(uploadedFiles)), map[string]interface{}{
-		"files": uploadedFiles,
+	// 直接返回与 Python 版本兼容的格式
+	c.JSON(200, map[string]interface{}{
+		"files":   uploadedFiles,
+		"message": fmt.Sprintf("成功上传 %d 个文件", len(uploadedFiles)),
 	})
 }
 
@@ -107,7 +113,8 @@ func (h *FileHandler) GetAllFilesStatus(c *gin.Context) {
 		return
 	}
 
-	utils.Success(c, map[string]interface{}{
+	// 直接返回与 Python 版本兼容的格式
+	c.JSON(200, map[string]interface{}{
 		"files": files,
 	})
 }

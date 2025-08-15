@@ -21,7 +21,8 @@
       "Bash(docker build:*)",
       "Bash(go mod:*)",
       "Bash(go get:*)",
-      "Bash(go build:*)"
+      "Bash(go build:*)",
+      "Bash(docker logs:*)"
     ],
     "deny": []
   }

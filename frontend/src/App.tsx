@@ -18,7 +18,7 @@ function App() {
   const fetchFilesStatus = useCallback(async () => {
     try {
       const response = await api.getAllFilesStatus();
-      setFiles(response.files);
+      setFiles(response.files || []);
     } catch (err) {
       console.error('Failed to fetch files status:', err);
     }
@@ -28,7 +28,7 @@ function App() {
   const fetchDatabaseStats = useCallback(async () => {
     try {
       const response = await api.getDatabaseStats();
-      setDatabaseStats(response.stats || []);
+      setDatabaseStats(response.stats || null);
     } catch (err) {
       console.error('Failed to fetch database stats:', err);
     }
@@ -41,7 +41,7 @@ function App() {
     const interval = setInterval(() => {
       fetchFilesStatus();
       fetchDatabaseStats();
-    }, 2000); // 每2秒更新一次
+    }, 5000000); // 每2秒更新一次
     return () => clearInterval(interval);
   }, [fetchFilesStatus, fetchDatabaseStats]);
 
@@ -119,12 +119,12 @@ function App() {
     fetchDatabaseStats();
   };
 
-  const pendingFiles = files.filter(f => f.status === 'pending');
-  const processingFiles = files.filter(f => 
+  const pendingFiles = (files || []).filter(f => f.status === 'pending');
+  const processingFiles = (files || []).filter(f => 
     ['uploading', 'parsing', 'chunking', 'embedding', 'storing'].includes(f.status)
   );
-  const completedFiles = files.filter(f => f.status === 'completed');
-  const errorFiles = files.filter(f => f.status === 'error');
+  const completedFiles = (files || []).filter(f => f.status === 'completed');
+  const errorFiles = (files || []).filter(f => f.status === 'error');
 
   return (
     <div className="min-h-screen bg-gray-50 dark:bg-gray-900 py-8">
